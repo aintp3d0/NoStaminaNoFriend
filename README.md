@@ -12,10 +12,13 @@ Unfriend Facebook friends if not in the MonsterCastle game friend list.
 
 ### NOTE
 - Used my own page url: &owner_friends_link
+- geckodriver PATH=$PATH:`pwd`/bin
+- matching is too slow even with a &async or mc_avatar grabber doing a bad job
 
 
 ### TODO
 - [ ] Join steps
+- [ ] Improve mc_avatar grabber
 
 ```
 videos/{video}.mp4
