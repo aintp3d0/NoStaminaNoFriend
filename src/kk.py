@@ -16,12 +16,6 @@ from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 
 
-video_directory = 'videos'
-frame_directory = 'frames'
-database = 'friends.db'
-delete_friend_button_name = 'Удалить из друзей'
-
-
 # SEE: https://stackoverflow.com/questions/200309/sqlite-database-default-time-value-now
 with sqlite3.connect(database) as conn:
   curr = conn.cursor()
@@ -56,6 +50,19 @@ def show_image(image):
   plt.show()
 
 
+video_directory = 'videos'
+frame_directory = 'frames'
+database = 'friends.db'
+delete_friend_button_name = 'Удалить из друзей'
+
+
+# HUAWEI Mate 20 Lite
+X, Y = (590, 1280)
+IMAGE_SHAPE = (X, Y)
+X_DELIMITER = int(X/5)
+Y_DELIMITER = int(Y/2)
+
+
 class MCFriendParser:
   """Splitting video frames to images and this.images to squares as avatars
 
@@ -77,6 +84,7 @@ class MCFriendParser:
 
       while success:
         image_name = os.path.join(image_directory, f"frame_{count}.jpg")
+        image = image.reshape(IMAGE_SHAPE)
         cv2.imwrite(image_name, image)
         success,image = vidcap.read()
         print('Read a new frame: ', success)
