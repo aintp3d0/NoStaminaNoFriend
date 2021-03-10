@@ -16,6 +16,9 @@ from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 
 
+database = 'friends.db'
+
+
 # SEE: https://stackoverflow.com/questions/200309/sqlite-database-default-time-value-now
 with sqlite3.connect(database) as conn:
   curr = conn.cursor()
@@ -27,7 +30,8 @@ with sqlite3.connect(database) as conn:
       friend_url TEXT,
       friend_avatar_url TEXT,
       t TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      deleted BOOLEAN DEFAULT 'f'
+      deleted BOOLEAN DEFAULT 'f',
+      error_on_deletion BOOLEAN DEFAULT 'f'
     )
     """
   )
@@ -52,15 +56,69 @@ def show_image(image):
 
 video_directory = 'videos'
 frame_directory = 'frames'
-database = 'friends.db'
+fb_avatar_dir = 'fb_avatars'
 delete_friend_button_name = 'Удалить из друзей'
 
 
-# HUAWEI Mate 20 Lite
-X, Y = (590, 1280)
-IMAGE_SHAPE = (X, Y)
-X_DELIMITER = int(X/5)
-Y_DELIMITER = int(Y/2)
+class Matching:
+  """Template matching.
+  """
+  def crop_fb_avatar(self, fb_avatar):
+    """Cropping image to make easy to match piece -20 margin.
+    """
+    # SEE: https://stackoverflow.com/a/15589825
+    # LEFT
+    x, y = (10, 10)
+    crop_image = fb_avatar[x:, y:]
+    # RIGHT
+    crop_image = crop_image[:-x, :-y]
+    return crop_image
+
+  async def get_template(self, fb_avatar_path):
+    img1 = cv2.imread(fb_avatar_path)
+    img1_gray = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    return self.crop_fb_avatar(img1_gray)
+
+  async def matches(self, img1_gray, img2):
+    # NOTE: img1_gray.size > img.size
+
+    try:
+      match = cv2.matchTemplate(img1_gray, img2, cv2.TM_CCOEFF_NORMED)
+    except Exception:
+      return False
+
+    threshold = 0.8
+    position = np.where(match >= threshold)
+
+    if position[0].size:
+      return True
+
+  async def not_main(self, fb_avatar_path):
+    """Looking for a matches for this &fb_avatar_path
+
+    Parameters
+    ----------
+    fb_avatar_path : str
+      path to the fb_avatar
+    remove_matches : bool
+      Flag to remove matched &mc_avatar with &fb_avatar_path, default False
+    """
+    img1_gray = await self.get_template(fb_avatar_path)
+
+    for video in os.listdir(frame_directory):
+      avatars_directory = os.path.join(frame_directory, new_name(video), 'avatars')
+      for mc_avatar in os.listdir(avatars_directory):
+        mc_avatar_path = os.path.join(avatars_directory, mc_avatar)
+
+        img2 = cv2.imread(mc_avatar_path, 0)
+        mm = await self.matches(img1_gray, img2)
+        if mm:
+          return mm
+
+  def match(self, fb_avatar_path) -> Optional[bool]:
+    """Matching Facebook avatar with MonsterCastle avatars
+    """
+    return asyncio.run(self.not_main(fb_avatar_path))
 
 
 class MCFriendParser:
@@ -84,7 +142,6 @@ class MCFriendParser:
 
       while success:
         image_name = os.path.join(image_directory, f"frame_{count}.jpg")
-        image = image.reshape(IMAGE_SHAPE)
         cv2.imwrite(image_name, image)
         success,image = vidcap.read()
         print('Read a new frame: ', success)
@@ -150,62 +207,42 @@ class MCFriendParser:
             )
             avatar += 1
 
+  async def remove_duplicates(self):
+    """Matching all &mc_avatar's with themselves.
+    """
+    print('[!] Removing duplicates')
+    matching = Matching()
+
+    for video in os.listdir(frame_directory):
+      frame_avatars_directory = os.path.join(frame_directory, video, 'avatars')
+      print('[+] Loaded', video)
+
+      def get_mc_avatars():
+        for avatar_name in os.listdir(frame_avatars_directory):
+          mc_avatar_path = os.path.join(frame_avatars_directory, avatar_name)
+          if os.path.exists(mc_avatar_path):
+            yield mc_avatar_path
+
+      for mc_avatar_path_as_p in get_mc_avatars():
+        mc_avatar_p = await matching.get_template(mc_avatar_path_as_p)
+
+        for mc_avatar_path_as_c in get_mc_avatars():
+          # XXX: skip itself
+          if mc_avatar_path_as_p == mc_avatar_path_as_c:
+            continue
+
+          mc_avatar_c = await matching.get_template(mc_avatar_path_as_c)
+
+          if await matching.matches(mc_avatar_p, mc_avatar_c):
+            os.remove(mc_avatar_path_as_c)
+
   def parse(self):
+    """self.__doc__. Also removing duplicates
+    """
     self.videos_to_frames()
     self.frames_to_avatars()
 
-
-class Matching:
-  """Template matching.
-  """
-  def crop_fb_avatar(self, fb_avatar):
-    """Cropping image to make easy to match piece -20 margin.
-    """
-    # SEE: https://stackoverflow.com/a/15589825
-    # LEFT
-    x, y = (10, 10)
-    crop_image = fb_avatar[x:, y:]
-    # RIGHT
-    crop_image = crop_image[:-x, :-y]
-    return crop_image
-
-  async def get_template(self, fb_avatar_path):
-    img1 = cv2.imread(fb_avatar_path)
-    img1_gray = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-    return self.crop_fb_avatar(img1_gray)
-
-  async def matches(self, img1_gray, img2):
-    # NOTE: img1_gray.size > img.size
-    try:
-      match = cv2.matchTemplate(img1_gray, img2, cv2.TM_CCOEFF_NORMED)
-    except Exception:
-      return False
-    threshold = 0.8
-    position = np.where(match >= threshold)
-
-    # TODO: Delete matched avatars
-    if position[0].size:
-      return True
-
-  async def not_main(self, fb_avatar_path):
-    img1_gray = await self.get_template(fb_avatar_path)
-
-    for video in os.listdir(frame_directory):
-      avatars_directory = os.path.join(frame_directory, new_name(video), 'avatars')
-      for mc_avatar in os.listdir(avatars_directory):
-        mc_avatar_path = os.path.join(avatars_directory, mc_avatar)
-        print('>', mc_avatar_path)
-
-        img2 = cv2.imread(mc_avatar_path, 0)
-        mm = await self.matches(img1_gray, img2)
-        if mm:
-          return mm
-
-  def match(self, fb_avatar_path) -> Optional[bool]:
-    """Matching Facebook avatar with MonsterCastle avatars
-    """
-    asyncio.run(self.not_main(fb_avatar_path))
-    return True
+    asyncio.run(self.remove_duplicates())
 
 
 class FBFriendParser:
@@ -227,8 +264,11 @@ class FBFriendParser:
 
     self.owner_friends_link = self.base_url.format('ames0k0/friends')
 
-  def _exit(self):
-    print('Default Exit')
+  def wait_web_render(self, seconds=1):
+    time.sleep(seconds)
+
+  def _exit(self, message='Default Exit'):
+    print(message)
     self.driver.close()
     exit()
 
@@ -273,9 +313,12 @@ class FBFriendParser:
       if delete_event is None:
         continue
 
-      container.click()
-      # XXX, let web to render it
-      time.sleep(1)
+      try:
+        container.click()
+      except Exception:
+        pass
+
+      self.wait_web_render()
       break
 
     delete_container = self.driver.find_element_by_css_selector('div[data-pagelet="root"]')
@@ -283,8 +326,19 @@ class FBFriendParser:
 
     for action in action_events:
       if action.text.strip() == delete_friend_button_name:
-        # # TODO: enable
-        # action.click()
+
+        action.click()
+        self.wait_web_render()
+
+        error_on_deletion = False
+        confirm_deletion = self.driver.find_element_by_xpath(
+          "//div[@aria-label='Подтвердить']"
+        )
+
+        if container:
+          error_on_deletion = True
+          confirm_deletion.click()
+
         with sqlite3.connect(database) as conn:
           curr = conn.cursor()
           curr.execute(
@@ -292,20 +346,16 @@ class FBFriendParser:
             UPDATE
               friends
             SET
-              deleted = 't'
+              deleted = 't', error_on_deletion={error_on_deletion}
             WHERE
               id={friend_id}
             """
           )
-        input('Enter to close the web driver!')
-        self._exit()
-
-        break
 
   def log_and_delete_friend(self, fb_avatar, fb_avatar_link):
     """Logging name and link to friend page.
     """
-    # XXX: check &FBLoginTest.ipynb
+    # XXX: check research/&FBLoginTest.ipynb
     friend_data = fb_avatar.find_element_by_xpath('..').find_element_by_xpath('..').find_element_by_xpath('..')
     containers = friend_data.find_elements_by_tag_name('div')
 
@@ -321,7 +371,7 @@ class FBFriendParser:
     while True:
       element = function(arg)
       if element is None:
-        time.sleep(1)
+        self.wait_web_render()
       else:
         return element
 
@@ -361,23 +411,26 @@ class FBFriendParser:
     # NOTE
     # Not filtered images, there is also a backgraound image.
     # Checking on logging.
+
     for aidx, avatar in enumerate(avatars[::-1]):
       avatar_link = avatar.get_attribute('src')
       if avatar_link:
         response = requests.get(avatar_link)
 
-        fb_avatar = os.path.join('test', 'avatars', f"avatar_{aidx}.jpg")
+        make_directory(fb_avatar_dir)
+
+        fb_avatar = os.path.join(fb_avatar_dir, f"avatar_{aidx}.jpg")
         with open(fb_avatar, 'wb') as ftw:
           ftw.write(response.content)
 
-        # XXX, MATCHING HERE
+        # # XXX, MATCHING HERE
         matched = Matching().match(fb_avatar)
         if not matched:
           self.log_and_delete_friend(avatar, avatar_link)
 
   def _scroll_to_the_end(self):
     # NOTE: your internet connection will affect to this value
-    SCROLL_PAUSE_TIME = 1.5
+    SCROLL_PAUSE_TIME = 2.5
     # Get scroll height
     last_height = self.driver.execute_script("return document.body.scrollHeight")
 
@@ -386,12 +439,22 @@ class FBFriendParser:
       self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
 
       # Wait to load page
-      time.sleep(SCROLL_PAUSE_TIME)
+      self.wait_web_render(SCROLL_PAUSE_TIME)
 
       # Calculate new scroll height and compare with last scroll height
       new_height = self.driver.execute_script("return document.body.scrollHeight")
       if new_height == last_height:
         break
+
+      try:
+        out_of_friends_section = self.driver.find_element_by_xpath(
+          "//div[@data-pagelet='ProfileAppSection_1']"
+        )
+        if out_of_friends_section:
+          break
+      except Exception:
+        pass
+
       last_height = new_height
 
   def get_friends_avatar(self):
@@ -399,7 +462,7 @@ class FBFriendParser:
     self.driver.get(self.owner_friends_link)
     _ = self.own_waiter(self._load_friends, 'No arg')
 
-    # self._scroll_to_the_end()
+    self._scroll_to_the_end()
 
     avatars = self.own_waiter(self._elements_tag, 'img')
     self._download_fb_avatars(avatars)
@@ -407,33 +470,26 @@ class FBFriendParser:
 
 
 def main():
-  # video -> frames -> avatars
-  # MCFriendParser().parse()
+  # # XXX: video -> frames -> avatars
+  MCFriendParser().parse()
 
-  # friends -> avatars -> !match -> delete -> log
+  # # XXX: friends -> avatars -> !match -> delete -> log
   FBFriendParser().get_friends_avatar()
 
 
 def match_test():
-  fb_avatar_dir = os.path.join('test', 'avatars')
   for fb_avatar in os.listdir(fb_avatar_dir):
+    fb_avatar = 'avatar_38.jpg'
     fb_avatar_path = os.path.join(fb_avatar_dir, fb_avatar)
     if os.path.isfile(fb_avatar_path):
-      Matching().prev_match(fb_avatar_path)
-    # print("?", fb_avatar)
+      fb_ = cv2.imread(fb_avatar_path)
+      if Matching().match(fb_avatar_path):
+        print('MATCHED')
+
+    print('NOT MATCHED', fb_avatar)
 
 
 if __name__ == '__main__':
-  match_test()
-  # main()
+  main()
 
-  # print(Matching().match('test/match/target_to_match.jpg'))
-  # exit()
-
-  # fbf = FBFriendParser()
-  # fbf.login()
-  # fbf.get_friends_avatar()
-
-  # mch = Matching(os.path.join('test', 'match'))
-  # mch.match('target_to_match.jpg', 'fake_dublicate.jpg')
-  # mch.match('target_to_match.jpg', 'real_dublicate.jpg')
+  # XXX: match_test()
